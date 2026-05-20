@@ -1,0 +1,974 @@
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../../services/app_state.dart';
+import '../../utils/app_theme.dart';
+import '../../widgets/profile_avatar.dart';
+import '../../models/models.dart';
+import 'user_profile_screen.dart';
+
+class MatchScreen extends StatefulWidget {
+  const MatchScreen({super.key});
+  @override
+  State<MatchScreen> createState() => _MatchScreenState();
+}
+
+class _MatchScreenState extends State<MatchScreen>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<Offset> _slide;
+  late Animation<double> _rotate;
+  Offset _dragOffset = Offset.zero;
+  bool? _liking;
+
+  final _searchCtrl = TextEditingController();
+  String _selectedSubject = 'All';
+  bool _showSearch = false;
+
+  final List<String> _subjects = [
+    'All',
+    'Mathematics',
+    'Physics',
+    'Chemistry',
+    'Biology',
+    'Computer Science',
+    'English',
+    'History',
+    'Statistics',
+    'Calculus',
+    'Algebra',
+    'Programming',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 400));
+    _slide = Tween<Offset>(begin: Offset.zero, end: const Offset(2, 0))
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+    _rotate = Tween<double>(begin: 0, end: 0.1).animate(_ctrl);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<AppState>().loadMatchUsers();
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  void _search() {
+    context.read<AppState>().loadMatchUsers(
+          subject: _selectedSubject == 'All' ? null : _selectedSubject,
+          search:
+              _searchCtrl.text.trim().isEmpty ? null : _searchCtrl.text.trim(),
+        );
+  }
+
+  // ── Swipe ─────────────────────────────────────────────────────────────────
+
+  void _swipe(bool like, AppState state) async {
+    if (state.matchUsers.isEmpty) return;
+
+    final candidate = state.matchUsers.first;
+
+    // ✅ Block liking if incompatible
+    if (like && !state.isCompatible(candidate)) {
+      _showIncompatibleSnackbar(state, candidate);
+      // Animate off to right but pass (not match)
+      setState(() => _liking = true);
+      _slide = Tween<Offset>(
+        begin: Offset.zero,
+        end: const Offset(2, 0),
+      ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+      _rotate = Tween<double>(begin: 0, end: 0.15).animate(_ctrl);
+      _ctrl.forward().then((_) {
+        state.passUser(candidate.id);
+        _ctrl.reset();
+        setState(() {
+          _liking = null;
+          _dragOffset = Offset.zero;
+        });
+      });
+      return;
+    }
+
+    setState(() => _liking = like);
+    _slide = Tween<Offset>(
+      begin: Offset.zero,
+      end: Offset(like ? 2 : -2, 0),
+    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+    _rotate = Tween<double>(begin: 0, end: like ? 0.15 : -0.15).animate(_ctrl);
+
+    _ctrl.forward().then((_) async {
+      final userId = state.matchUsers.first.id;
+      if (like) {
+        final matched = await state.likeUser(userId);
+        if (matched) {
+          _showMatchBanner(candidate);
+        }
+      } else {
+        state.passUser(userId);
+      }
+      _ctrl.reset();
+      setState(() {
+        _liking = null;
+        _dragOffset = Offset.zero;
+      });
+    });
+  }
+
+  void _showIncompatibleSnackbar(AppState state, RealUser user) {
+    // Determine the reason
+    final String reason;
+    if (!state.currentUserHasAttributes) {
+      reason =
+          'Complete your profile first — add your subjects or weaknesses to start matching.';
+    } else {
+      reason =
+          '${user.fullName.split(' ').first} has no profile attributes — no match possible.';
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Text('⚠️ ', style: TextStyle(fontSize: 18)),
+            Expanded(
+              child: Text(
+                reason,
+                style: const TextStyle(
+                    fontFamily: 'Poppins', fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: AppTheme.error,
+        duration: const Duration(seconds: 3),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+  }
+
+  void _showMatchBanner(RealUser user) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Text('🎉 ', style: TextStyle(fontSize: 18)),
+            Expanded(
+              child: Text(
+                "You matched with ${user.fullName}! Check Messages.",
+                style: const TextStyle(
+                    fontFamily: 'Poppins', fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: AppTheme.success,
+        duration: const Duration(seconds: 3),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+  }
+
+  void _showRatingDialog(BuildContext context, RealUser user) {
+    int selectedScore = 0;
+    showDialog(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          backgroundColor: AppTheme.bgCard,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text('Rate ${user.fullName}',
+              style: const TextStyle(
+                  color: AppTheme.textPrimary,
+                  fontFamily: 'Poppins',
+                  fontWeight: FontWeight.bold)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('How would you rate this study partner?',
+                  style: TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontFamily: 'Poppins',
+                      fontSize: 13)),
+              const SizedBox(height: 20),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(
+                    5,
+                    (i) => GestureDetector(
+                          onTap: () => setS(() => selectedScore = i + 1),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            child: Icon(
+                              i < selectedScore
+                                  ? Icons.star_rounded
+                                  : Icons.star_border_rounded,
+                              color: AppTheme.warning,
+                              size: 36,
+                            ),
+                          ),
+                        )),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel',
+                  style: TextStyle(color: AppTheme.textMuted)),
+            ),
+            ElevatedButton(
+              onPressed: selectedScore == 0
+                  ? null
+                  : () async {
+                      Navigator.pop(ctx);
+                      final result = await context
+                          .read<AppState>()
+                          .rateUser(ratedId: user.id, score: selectedScore);
+                      if (mounted) {
+                        final ok = result['success'] == true;
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                            content: Text(ok
+                                ? 'Rating submitted!'
+                                : (result['message'] ?? 'Failed to submit')),
+                            backgroundColor:
+                                ok ? AppTheme.success : AppTheme.error));
+                      }
+                    },
+              style:
+                  ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+              child:
+                  const Text('Submit', style: TextStyle(fontFamily: 'Poppins')),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+
+    // ── Banner: current user has no attributes ────────────────────────────
+    final showNoProfileBanner = !state.currentUserHasAttributes;
+
+    return Scaffold(
+      body: SafeArea(
+        child: Column(
+          children: [
+            // Header
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(children: [
+                              Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: const BoxDecoration(
+                                      color: AppTheme.success,
+                                      shape: BoxShape.circle)),
+                              const SizedBox(width: 6),
+                              const Text('StudyMatch',
+                                  style: TextStyle(
+                                      color: AppTheme.textPrimary,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 18,
+                                      fontFamily: 'Poppins')),
+                            ]),
+                            const Text('Find your study partner',
+                                style: TextStyle(
+                                    color: AppTheme.textMuted,
+                                    fontSize: 12,
+                                    fontFamily: 'Poppins')),
+                          ]),
+                      IconButton(
+                        icon: Icon(
+                            _showSearch ? Icons.search_off : Icons.search,
+                            color: AppTheme.textSecondary),
+                        onPressed: () =>
+                            setState(() => _showSearch = !_showSearch),
+                      ),
+                    ],
+                  ),
+
+                  // ── No-profile warning banner ─────────────────────────
+                  if (showNoProfileBanner) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: AppTheme.warning.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                            color: AppTheme.warning.withOpacity(0.5)),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.info_outline,
+                              color: AppTheme.warning, size: 18),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Your profile has no subjects or attributes. '
+                              'Edit your profile to start matching!',
+                              style: TextStyle(
+                                  color: AppTheme.warning,
+                                  fontFamily: 'Poppins',
+                                  fontSize: 12,
+                                  height: 1.4),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+
+                  // Search Panel
+                  if (_showSearch) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: AppTheme.bgCard,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: AppTheme.divider),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          TextField(
+                            controller: _searchCtrl,
+                            style: const TextStyle(
+                                color: AppTheme.textPrimary,
+                                fontFamily: 'Poppins'),
+                            decoration: InputDecoration(
+                              hintText: 'Search by name...',
+                              hintStyle: const TextStyle(
+                                  color: AppTheme.textMuted,
+                                  fontFamily: 'Poppins'),
+                              prefixIcon: const Icon(Icons.search,
+                                  color: AppTheme.textMuted, size: 20),
+                              filled: true,
+                              fillColor: AppTheme.inputBg,
+                              border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide: BorderSide.none),
+                              contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 10),
+                            ),
+                            onSubmitted: (_) => _search(),
+                          ),
+                          const SizedBox(height: 12),
+                          const Text('Filter by Subject',
+                              style: TextStyle(
+                                  color: AppTheme.textMuted,
+                                  fontSize: 12,
+                                  fontFamily: 'Poppins',
+                                  letterSpacing: 0.5)),
+                          const SizedBox(height: 8),
+                          SizedBox(
+                            height: 36,
+                            child: ListView.separated(
+                              scrollDirection: Axis.horizontal,
+                              itemCount: _subjects.length,
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(width: 8),
+                              itemBuilder: (_, i) {
+                                final s = _subjects[i];
+                                final sel = _selectedSubject == s;
+                                return GestureDetector(
+                                  onTap: () =>
+                                      setState(() => _selectedSubject = s),
+                                  child: AnimatedContainer(
+                                    duration: const Duration(milliseconds: 150),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 14, vertical: 6),
+                                    decoration: BoxDecoration(
+                                      color: sel
+                                          ? AppTheme.primary
+                                          : AppTheme.inputBg,
+                                      borderRadius: BorderRadius.circular(20),
+                                      border: Border.all(
+                                          color: sel
+                                              ? AppTheme.primary
+                                              : AppTheme.divider),
+                                    ),
+                                    child: Text(s,
+                                        style: TextStyle(
+                                          color: sel
+                                              ? Colors.white
+                                              : AppTheme.textSecondary,
+                                          fontFamily: 'Poppins',
+                                          fontSize: 12,
+                                          fontWeight: sel
+                                              ? FontWeight.w600
+                                              : FontWeight.normal,
+                                        )),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              onPressed: _search,
+                              icon: const Icon(Icons.search, size: 16),
+                              label: const Text('Search',
+                                  style: TextStyle(
+                                      fontFamily: 'Poppins',
+                                      fontWeight: FontWeight.w600)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppTheme.primary,
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10)),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // Cards
+            Expanded(
+              child: state.loadingUsers
+                  ? const Center(
+                      child: CircularProgressIndicator(color: AppTheme.primary))
+                  : state.matchUsers.isEmpty
+                      ? _EmptyState(onRefresh: () => state.loadMatchUsers())
+                      : Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            // Background card
+                            if (state.matchUsers.length > 1)
+                              Positioned(
+                                top: 10,
+                                child: Transform.scale(
+                                  scale: 0.95,
+                                  child: _MatchCard(
+                                    user: state.matchUsers[1],
+                                    overlay: null,
+                                    isIncompatible: !state
+                                        .isCompatible(state.matchUsers[1]),
+                                    currentUserHasNoProfile:
+                                        !state.currentUserHasAttributes,
+                                    onRate: () {},
+                                    onTap: () {},
+                                  ),
+                                ),
+                              ),
+                            // Front card
+                            GestureDetector(
+                              onPanUpdate: (d) => setState(() {
+                                _dragOffset += d.delta;
+                                _liking = _dragOffset.dx > 40
+                                    ? true
+                                    : (_dragOffset.dx < -40 ? false : null);
+                              }),
+                              onPanEnd: (d) {
+                                if (_dragOffset.dx.abs() > 100) {
+                                  _swipe(_dragOffset.dx > 0, state);
+                                } else {
+                                  setState(() {
+                                    _dragOffset = Offset.zero;
+                                    _liking = null;
+                                  });
+                                }
+                              },
+                              child: Transform.translate(
+                                offset: _dragOffset,
+                                child: Transform.rotate(
+                                  angle: _dragOffset.dx / 400,
+                                  child: SlideTransition(
+                                    position: _slide,
+                                    child: _MatchCard(
+                                      user: state.matchUsers.first,
+                                      overlay: _liking,
+                                      isIncompatible: !state
+                                          .isCompatible(state.matchUsers.first),
+                                      currentUserHasNoProfile:
+                                          !state.currentUserHasAttributes,
+                                      onRate: () => _showRatingDialog(
+                                          context, state.matchUsers.first),
+                                      onTap: () => Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => UserProfileScreen(
+                                              user: state.matchUsers.first),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+            ),
+
+            // Action buttons
+            Padding(
+              padding: const EdgeInsets.fromLTRB(40, 8, 40, 24),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _SwipeButton(
+                    icon: Icons.close,
+                    color: AppTheme.error,
+                    onTap: state.matchUsers.isNotEmpty
+                        ? () => _swipe(false, state)
+                        : null,
+                  ),
+                  _SwipeButton(
+                    icon: Icons.star_rounded,
+                    color: AppTheme.warning,
+                    onTap: state.matchUsers.isNotEmpty
+                        ? () =>
+                            _showRatingDialog(context, state.matchUsers.first)
+                        : null,
+                  ),
+                  // ✅ Heart button dims when incompatible (either side)
+                  _SwipeButton(
+                    icon: Icons.favorite,
+                    color: state.matchUsers.isNotEmpty &&
+                            !state.isCompatible(state.matchUsers.first)
+                        ? AppTheme.textMuted
+                        : AppTheme.success,
+                    size: 64,
+                    onTap: state.matchUsers.isNotEmpty
+                        ? () => _swipe(true, state)
+                        : null,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Match Card ────────────────────────────────────────────────────────────────
+class _MatchCard extends StatelessWidget {
+  final RealUser user;
+  final bool? overlay;
+  final bool isIncompatible;
+  final bool currentUserHasNoProfile;
+  final VoidCallback onRate;
+  final VoidCallback onTap;
+
+  const _MatchCard({
+    required this.user,
+    this.overlay,
+    required this.isIncompatible,
+    required this.currentUserHasNoProfile,
+    required this.onRate,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isTutor = user.role == 'tutor';
+    final roleColor = isTutor ? AppTheme.success : const Color(0xFF3B82F6);
+
+    // Determine which warning message to show on the card
+    final String? warningMessage = isIncompatible
+        ? (currentUserHasNoProfile
+            ? 'Add your subjects or weaknesses to your profile before matching.'
+            : 'This user has no profile attributes set — you cannot match with them.')
+        : null;
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: MediaQuery.of(context).size.width - 48,
+        margin: const EdgeInsets.symmetric(horizontal: 24),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFF2D1F5E), Color(0xFF1A1730)],
+          ),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(
+            color: overlay == true
+                ? AppTheme.success.withOpacity(0.5)
+                : overlay == false
+                    ? AppTheme.error.withOpacity(0.5)
+                    : isIncompatible
+                        ? AppTheme.error.withOpacity(0.3)
+                        : AppTheme.divider,
+            width: overlay != null ? 2 : 1,
+          ),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(24),
+          child: Stack(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        ProfileAvatar(
+                          photoUrl: user.profilePhotoUrl,
+                          displayName: user.fullName,
+                          size: 72,
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(user.fullName,
+                                        style: const TextStyle(
+                                            color: AppTheme.textPrimary,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 18,
+                                            fontFamily: 'Poppins')),
+                                  ),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 3),
+                                    decoration: BoxDecoration(
+                                      color: roleColor.withOpacity(0.2),
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(
+                                          color: roleColor.withOpacity(0.5)),
+                                    ),
+                                    child: Text(
+                                      isTutor ? '🏫' : '🎓',
+                                      style: const TextStyle(fontSize: 12),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              if (user.department != null) ...[
+                                const SizedBox(height: 2),
+                                Text(user.department!,
+                                    style: const TextStyle(
+                                        color: AppTheme.textSecondary,
+                                        fontFamily: 'Poppins',
+                                        fontSize: 13)),
+                              ],
+                              if (user.school != null) ...[
+                                const SizedBox(height: 2),
+                                Text(user.school!,
+                                    style: const TextStyle(
+                                        color: AppTheme.textMuted,
+                                        fontFamily: 'Poppins',
+                                        fontSize: 12)),
+                              ],
+                              const SizedBox(height: 6),
+                              GestureDetector(
+                                onTap: onRate,
+                                child: Row(
+                                  children: [
+                                    ...List.generate(
+                                        5,
+                                        (i) => Icon(
+                                              i < user.rating.round()
+                                                  ? Icons.star_rounded
+                                                  : Icons.star_border_rounded,
+                                              color: AppTheme.warning,
+                                              size: 16,
+                                            )),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                        '${user.rating.toStringAsFixed(1)} (${user.ratingCount})',
+                                        style: const TextStyle(
+                                            color: AppTheme.textMuted,
+                                            fontSize: 11,
+                                            fontFamily: 'Poppins')),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+                    const Divider(color: AppTheme.divider),
+                    const SizedBox(height: 12),
+
+                    // ✅ Incompatible warning banner (context-aware message)
+                    if (warningMessage != null) ...[
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: AppTheme.error.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                              color: AppTheme.error.withOpacity(0.4)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.warning_amber_rounded,
+                                color: AppTheme.error, size: 18),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                warningMessage,
+                                style: const TextStyle(
+                                    color: AppTheme.error,
+                                    fontFamily: 'Poppins',
+                                    fontSize: 12,
+                                    height: 1.4),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+
+                    if (user.subjects.isNotEmpty) ...[
+                      _CardSection(title: '📚 Subjects', chips: user.subjects),
+                      const SizedBox(height: 12),
+                    ],
+                    if (user.strengths.isNotEmpty) ...[
+                      _CardSection(
+                        title: isTutor ? '💪 Can Tutor' : '💪 Strong In',
+                        chips: user.strengths,
+                        color: AppTheme.success,
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    if (user.weaknesses.isNotEmpty) ...[
+                      _CardSection(
+                        title: isTutor ? '📖 Still Learning' : '😅 Needs Help',
+                        chips: user.weaknesses,
+                        color: AppTheme.error,
+                      ),
+                      const SizedBox(height: 13),
+                    ],
+                    if (user.learningStyles.isNotEmpty)
+                      _CardSection(
+                          title: '🧠 Learning Style',
+                          chips: user.learningStyles),
+
+                    // Empty profile note for candidate
+                    if (user.subjects.isEmpty &&
+                        user.strengths.isEmpty &&
+                        user.weaknesses.isEmpty &&
+                        user.learningStyles.isEmpty) ...[
+                      const SizedBox(height: 4),
+                      Center(
+                        child: Text(
+                          'No subjects or skills listed',
+                          style: TextStyle(
+                              color: AppTheme.textMuted.withOpacity(0.7),
+                              fontSize: 12,
+                              fontFamily: 'Poppins',
+                              fontStyle: FontStyle.italic),
+                        ),
+                      ),
+                    ],
+
+                    const SizedBox(height: 12),
+                    Center(
+                      child: Text('Tap to view full profile',
+                          style: TextStyle(
+                              color: AppTheme.textMuted.withOpacity(0.6),
+                              fontSize: 11,
+                              fontFamily: 'Poppins',
+                              fontStyle: FontStyle.italic)),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Swipe overlay
+              if (overlay != null)
+                Positioned.fill(
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 100),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(24),
+                      color: (overlay! && !isIncompatible
+                              ? AppTheme.success
+                              : AppTheme.error)
+                          .withOpacity(0.15),
+                    ),
+                    child: Center(
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: (overlay! && !isIncompatible
+                                  ? AppTheme.success
+                                  : AppTheme.error)
+                              .withOpacity(0.9),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          // Show block icon when incompatible and swiping right
+                          overlay! && isIncompatible
+                              ? Icons.block
+                              : overlay!
+                                  ? Icons.favorite
+                                  : Icons.close,
+                          color: Colors.white,
+                          size: 40,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CardSection extends StatelessWidget {
+  final String title;
+  final List<String> chips;
+  final Color? color;
+  const _CardSection({required this.title, required this.chips, this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title,
+            style: const TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                fontFamily: 'Poppins')),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: chips
+              .map((ch) => Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                        color: color != null
+                            ? color!.withOpacity(0.15)
+                            : AppTheme.chipBg,
+                        borderRadius: BorderRadius.circular(20),
+                        border: color != null
+                            ? Border.all(color: color!.withOpacity(0.3))
+                            : null),
+                    child: Text(ch,
+                        style: TextStyle(
+                            color: color ?? AppTheme.textPrimary,
+                            fontSize: 11,
+                            fontFamily: 'Poppins')),
+                  ))
+              .toList(),
+        ),
+      ],
+    );
+  }
+}
+
+class _SwipeButton extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final VoidCallback? onTap;
+  final double size;
+  const _SwipeButton(
+      {required this.icon, required this.color, this.onTap, this.size = 52});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          shape: BoxShape.circle,
+          border: Border.all(color: color.withOpacity(0.4), width: 2),
+        ),
+        child: Icon(icon, color: color, size: size * 0.45),
+      ),
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  final VoidCallback onRefresh;
+  const _EmptyState({required this.onRefresh});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 80,
+            height: 80,
+            decoration: BoxDecoration(
+                color: AppTheme.bgCard,
+                shape: BoxShape.circle,
+                border: Border.all(color: AppTheme.divider)),
+            child: const Icon(Icons.people_alt_outlined,
+                color: AppTheme.textMuted, size: 38),
+          ),
+          const SizedBox(height: 20),
+          const Text('No more users',
+              style: TextStyle(
+                  color: AppTheme.textPrimary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  fontFamily: 'Poppins')),
+          const SizedBox(height: 8),
+          const Text("You've seen everyone for now!",
+              style: TextStyle(
+                  color: AppTheme.textSecondary, fontFamily: 'Poppins')),
+          const SizedBox(height: 20),
+          ElevatedButton.icon(
+            onPressed: onRefresh,
+            icon: const Icon(Icons.refresh),
+            label:
+                const Text('Refresh', style: TextStyle(fontFamily: 'Poppins')),
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+          ),
+        ],
+      ),
+    );
+  }
+}
