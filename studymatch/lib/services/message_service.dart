@@ -5,7 +5,7 @@ import 'package:http/http.dart' as http;
 
 class MessageService {
   static const _base =
-      'http://192.168.254.111/StudyMatch/studymatch-api/messages.php';
+      'http://localhost/StudyMatch/studymatch-api/messages.php';
   static const _apiKey = 'studymatch_api_key_2026';
 
   // ── Send text message ────────────────────────────────────────────────────────
