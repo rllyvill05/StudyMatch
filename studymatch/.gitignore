@@ -43,3 +43,15 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# uploads (VERY IMPORTANT)
+studymatch-api/uploads/
+
+# Flutter build files
+studymatch/build/
+studymatch/.dart_tool/
+studymatch/.idea/
+studymatch/.packages
+
+# system files
+*.log
